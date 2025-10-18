@@ -1,0 +1,19 @@
+[workspace]
+resolver = "3"
+package = { edition = "2024", version = "0.1.0" }
+members = ["corporation_tax", "db_wallet", "db_wallet_generate"]
+
+[workspace.dependencies]
+bytes = { version = "1.10", features = ["std"] }
+chrono = { version = "0.4", features = ["serde", "std"] }
+clap = { version = "4.5", features = ["derive", "env"] }
+image = { version = "0.25", default-features = false }
+reqwest = { version = "0.12", features = ["json"] }
+rust_decimal = { version = "1.39" }
+sea-orm = { version = "1.1", default-features = false, features = ["with-chrono", "macros"] }
+sea-orm-migration = { version = "1.1", default-features = false, features = ["with-chrono"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+strum = { version = "0.27", features = ["derive"] }
+tokio = { version = "1.47", default-features = false }
+umya-spreadsheet = "2.3.3"
