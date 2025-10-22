@@ -54,6 +54,8 @@ fn main() {
     c.set_value_number(45947.1123);
     c.get_style_mut().set_number_format(nf_datetime);
 
+    let c = w.get_cell_mut((1, 1));
+    c.set_value_string("标题");
     w.add_merge_cells("A1:B2");
 
     w.get_column_dimension_mut("A").set_auto_width(true);

@@ -2,21 +2,20 @@ mod db_op;
 mod esi;
 mod report;
 
-use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand};
 use sea_orm::{ConnectOptions, ConnectionTrait, Database};
-use std::{path::Path, str::FromStr};
+use std::path::Path;
 use tokio::fs::read_to_string;
 use umya_spreadsheet::{new_file_empty_worksheet, writer};
 
 use crate::{
     db_op::{
-        check_out_unknown_ids, db_upgrade_wall_journal, get_all_ids, get_character_name,
+        YearMonth, check_out_unknown_ids, db_upgrade_wall_journal, get_all_ids, get_character_name,
         get_corporation_name, insert_character_info, insert_corporation_info,
         update_character_info, update_corporation_info,
     },
     esi::{CORPORATION_ID, QueryDevice},
-    report::SheetWalletJournal,
+    report::{SheetTaxList, SheetWalletJournal},
 };
 
 #[tokio::main]
@@ -44,11 +43,12 @@ async fn main() {
             https_proxy,
             character_id,
             corporation_id,
+            character_file,
         } => {
             println!("Upgrading Information");
             let query_device = QueryDevice::new(https_proxy, None);
 
-            if character_id.is_none() && corporation_id.is_none() {
+            if character_id.is_none() && corporation_id.is_none() && character_file.is_none() {
                 if let Err(e) = upgrade_information(&query_device, &db).await {
                     println!("{}", e);
                 }
@@ -66,6 +66,12 @@ async fn main() {
                 }
             }
 
+            if let Some(character_file) = character_file {
+                if let Err(e) = upgrade_character_file(&query_device, &db, character_file).await {
+                    println!("{}", e);
+                }
+            }
+
             println!("Upgraded Information");
         }
         SubCommands::GenerateReport {
@@ -75,8 +81,8 @@ async fn main() {
         } => {
             println!("Generating report");
             let p = Path::new(output_path.as_str());
-            let start_time = DateTime::<Utc>::from_str(start_time.as_str()).unwrap();
-            let end_time = DateTime::<Utc>::from_str(end_time.as_str()).unwrap();
+            let start_time = YearMonth::from_str(start_time.as_str()).unwrap();
+            let end_time = YearMonth::from_str(end_time.as_str()).unwrap();
 
             if let Err(e) = generate_report(&db, &p, start_time, end_time).await {
                 println!("{}", e);
@@ -206,16 +212,46 @@ async fn upgrade_corporation_info<DB: ConnectionTrait>(
     }
 }
 
+async fn upgrade_character_file<DB: ConnectionTrait>(
+    query_device: &QueryDevice,
+    db: &DB,
+    file_path: String,
+) -> Result<(), String> {
+    let s = read_to_string(file_path).await.map_err(|e| e.to_string())?;
+    let ids = serde_json::from_str(s.as_str()).map_err(|e| e.to_string())?;
+    let ids = check_out_unknown_ids(db, ids).await?;
+
+    for id in ids {
+        if let Some(info) = query_device.get_character_public_information(id).await? {
+            let name = info.name.clone();
+            let urls = query_device.get_character_portraits(id).await?;
+            let portraits = query_device.get_portraits(&urls).await?;
+            insert_character_info(db, id, info, portraits).await?;
+            println!("inserted character {}: {}", id, name);
+        }
+    }
+
+    Ok(())
+}
+
 async fn generate_report<DB: ConnectionTrait>(
     db: &DB,
     output_path: &Path,
-    start_time: DateTime<Utc>,
-    end_time: DateTime<Utc>,
+    start: YearMonth,
+    end: YearMonth,
 ) -> Result<(), String> {
-    let data = SheetWalletJournal::select_from_db(db, start_time, end_time).await?;
+    let data_wallet_journal =
+        SheetWalletJournal::select_from_db(db, start.lower(), end.upper()).await?;
+    let data_tax_list = SheetTaxList::select_from_db(db, start, end).await?;
+
     let mut book = new_file_empty_worksheet();
+
     let worksheet = book.new_sheet("主账户流水").map_err(|e| e.to_string())?;
-    data.insert_worksheet(worksheet);
+    data_wallet_journal.insert_worksheet(worksheet);
+
+    let worksheet = book.new_sheet("税收清单").map_err(|e| e.to_string())?;
+    data_tax_list.insert_worksheet(worksheet);
+
     writer::xlsx::write(&book, output_path).map_err(|e| e.to_string())?;
 
     Ok(())
@@ -253,6 +289,9 @@ enum SubCommands {
 
         #[arg(long)]
         corporation_id: Option<i64>,
+
+        #[arg(long)]
+        character_file: Option<String>,
     },
 
     #[command(about = "generate report")]

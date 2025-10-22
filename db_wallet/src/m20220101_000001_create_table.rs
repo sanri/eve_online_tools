@@ -92,7 +92,7 @@ fn statements() -> Vec<(CreateStatement, DropStatement)> {
         ),
         (ct_corporations(), dt_corporations()),
         (ct_pap_journal(), dt_pap_journal()),
-        (ct_tax_exemption_journal(), dt_tax_exemption_journal()),
+        (ct_taxable_list(), dt_taxable_list()),
         (ct_tax_parameters(), dt_tax_parameters()),
     ]
 }
@@ -380,7 +380,7 @@ fn ct_pap_journal() -> CreateStatement {
         )
         .col(
             ColumnDef::new(IdenPapJournal::CharacterId)
-                .integer()
+                .big_integer()
                 .not_null(),
         )
         .col(ColumnDef::new(IdenPapJournal::Year).integer().not_null())
@@ -451,53 +451,37 @@ fn dt_pap_journal() -> DropStatement {
 }
 
 #[derive(DeriveIden)]
-enum IdenTaxExemptionJournal {
-    #[sea_orm(iden = "tax_exemption_journal")]
+enum IdenTaxableList {
+    #[sea_orm(iden = "taxable_list")]
     Table,
     Id,
     UserId,
     Year,
     Month,
-    PollTax,
-    PapTax,
+    PollTax, // true 表示此月份需要征收人头税
+    PapTax,  // true 表示此月份需要征收PAP税
 }
 
-fn ct_tax_exemption_journal() -> CreateStatement {
+fn ct_taxable_list() -> CreateStatement {
     let table = Table::create()
         .if_not_exists()
-        .table(IdenTaxExemptionJournal::Table)
+        .table(IdenTaxableList::Table)
         .col(
-            ColumnDef::new(IdenTaxExemptionJournal::Id)
+            ColumnDef::new(IdenTaxableList::Id)
                 .integer()
                 .not_null()
                 .primary_key()
                 .auto_increment(),
         )
+        .col(ColumnDef::new(IdenTaxableList::UserId).integer().not_null())
+        .col(ColumnDef::new(IdenTaxableList::Year).integer().not_null())
+        .col(ColumnDef::new(IdenTaxableList::Month).integer().not_null())
         .col(
-            ColumnDef::new(IdenTaxExemptionJournal::UserId)
-                .integer()
-                .not_null(),
-        )
-        .col(
-            ColumnDef::new(IdenTaxExemptionJournal::Year)
-                .integer()
-                .not_null(),
-        )
-        .col(
-            ColumnDef::new(IdenTaxExemptionJournal::Month)
-                .integer()
-                .not_null(),
-        )
-        .col(
-            ColumnDef::new(IdenTaxExemptionJournal::PollTax)
+            ColumnDef::new(IdenTaxableList::PollTax)
                 .boolean()
                 .not_null(),
         )
-        .col(
-            ColumnDef::new(IdenTaxExemptionJournal::PapTax)
-                .boolean()
-                .not_null(),
-        )
+        .col(ColumnDef::new(IdenTaxableList::PapTax).boolean().not_null())
         .to_owned();
 
     let index = vec![
@@ -505,35 +489,35 @@ fn ct_tax_exemption_journal() -> CreateStatement {
             .if_not_exists()
             .name(format!(
                 "index_{}_{}",
-                IdenTaxExemptionJournal::Table.to_string(),
-                IdenTaxExemptionJournal::UserId.to_string()
+                IdenTaxableList::Table.to_string(),
+                IdenTaxableList::UserId.to_string()
             ))
-            .table(IdenTaxExemptionJournal::Table)
-            .col(IdenTaxExemptionJournal::UserId)
+            .table(IdenTaxableList::Table)
+            .col(IdenTaxableList::UserId)
             .to_owned(),
         Index::create()
             .if_not_exists()
             .name(format!(
                 "unique_{}_{}_{}_{}",
-                IdenTaxExemptionJournal::Table.to_string(),
-                IdenTaxExemptionJournal::UserId.to_string(),
-                IdenTaxExemptionJournal::Year.to_string(),
-                IdenTaxExemptionJournal::Month.to_string()
+                IdenTaxableList::Table.to_string(),
+                IdenTaxableList::UserId.to_string(),
+                IdenTaxableList::Year.to_string(),
+                IdenTaxableList::Month.to_string()
             ))
-            .table(IdenTaxExemptionJournal::Table)
-            .col(IdenTaxExemptionJournal::UserId)
-            .col(IdenTaxExemptionJournal::Year)
-            .col(IdenTaxExemptionJournal::Month)
+            .table(IdenTaxableList::Table)
+            .col(IdenTaxableList::UserId)
+            .col(IdenTaxableList::Year)
+            .col(IdenTaxableList::Month)
             .to_owned(),
     ];
 
     CreateStatement::new(table, index)
 }
 
-fn dt_tax_exemption_journal() -> DropStatement {
+fn dt_taxable_list() -> DropStatement {
     let table = Table::drop()
         .if_exists()
-        .table(IdenTaxExemptionJournal::Table)
+        .table(IdenTaxableList::Table)
         .to_owned();
 
     let index = vec![
@@ -541,21 +525,21 @@ fn dt_tax_exemption_journal() -> DropStatement {
             .if_exists()
             .name(format!(
                 "index_{}_{}",
-                IdenTaxExemptionJournal::Table.to_string(),
-                IdenTaxExemptionJournal::UserId.to_string()
+                IdenTaxableList::Table.to_string(),
+                IdenTaxableList::UserId.to_string()
             ))
-            .table(IdenTaxExemptionJournal::Table)
+            .table(IdenTaxableList::Table)
             .to_owned(),
         Index::drop()
             .if_exists()
             .name(format!(
                 "unique_{}_{}_{}_{}",
-                IdenTaxExemptionJournal::Table.to_string(),
-                IdenTaxExemptionJournal::UserId.to_string(),
-                IdenTaxExemptionJournal::Year.to_string(),
-                IdenTaxExemptionJournal::Month.to_string()
+                IdenTaxableList::Table.to_string(),
+                IdenTaxableList::UserId.to_string(),
+                IdenTaxableList::Year.to_string(),
+                IdenTaxableList::Month.to_string()
             ))
-            .table(IdenTaxExemptionJournal::Table)
+            .table(IdenTaxableList::Table)
             .to_owned(),
     ];
     DropStatement::new(table, index)
@@ -568,9 +552,9 @@ enum IdenTaxParameters {
     Id,
     Year,
     Month,
-    PollTax,
-    PapTax,
-    PapStandard,
+    PollTax,     // 指定月份的人头税, 单位 0.01 isk
+    PapTax,      // 指定月份的PAP税, 单位 0.01 isk / pap
+    PapStandard, // 指定月份的达标PAP分, 单位 0.01分
 }
 
 fn ct_tax_parameters() -> CreateStatement {
@@ -592,12 +576,12 @@ fn ct_tax_parameters() -> CreateStatement {
         )
         .col(
             ColumnDef::new(IdenTaxParameters::PollTax)
-                .integer()
+                .big_integer()
                 .not_null(),
         )
         .col(
             ColumnDef::new(IdenTaxParameters::PapTax)
-                .integer()
+                .big_integer()
                 .not_null(),
         )
         .col(

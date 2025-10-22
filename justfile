@@ -53,11 +53,19 @@ run_upgrade_information:
         upgrade_information \
             --https_proxy "http://127.0.0.1:9098"
 
+# upgrade characters information
+run_upgrade_information_with_file:
+    cargo run --package corporation_tax -- \
+        --db_path "{{path_test_db_wallet}}" \
+        upgrade_information \
+            --https_proxy "http://127.0.0.1:9098" \
+            --character_file "target/characters_ids.json"
+
 # generate report
 run_generate_report:
     cargo run --package corporation_tax -- \
         --db_path "{{path_test_db_wallet}}" \
         generate_report \
-            --output_path "target/t.xlsx" \
-            --start_time "2025-09-01T00:00:00Z" \
-            --end_time "2025-10-01T00:00:00Z"
+            --output_path "target/report.xlsx" \
+            --start_time "2025-09" \
+            --end_time "2025-10"

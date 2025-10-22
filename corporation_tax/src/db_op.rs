@@ -1,19 +1,29 @@
-use rust_decimal::Decimal;
-use sea_orm::{ConnectionTrait, EntityTrait, FromQueryResult, NotSet, QuerySelect, Set};
-use std::collections::BTreeSet;
-
 use crate::esi::{
     Portraits, ResCharacterPublicInformation, ResCorporationInformation,
     ResCorporationWalletJournal,
 };
-use db_wallet::entities::{
-    characters::{ActiveModel as AmCharacters, Entity as ECharacters},
-    corporation_wallet_journal::{
-        ActiveModel as AmCorporationWalletJournal, Column as CCorporationWalletJournal,
-        Entity as ECorporationWalletJournal,
+use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
+use db_wallet::{
+    JournalRefType,
+    entities::{
+        characters::{ActiveModel as AmCharacters, Column as CCharacters, Entity as ECharacters},
+        corporation_wallet_journal::{
+            ActiveModel as AmCorporationWalletJournal, Column as CCorporationWalletJournal,
+            Entity as ECorporationWalletJournal,
+        },
+        corporations::{ActiveModel as AmCorporations, Entity as ECorporations},
+        pap_journal::{Column as CPapJournal, Entity as EPapJournal},
+        tax_parameters::{Column as CTaxParameters, Entity as ETaxParameters},
+        taxable_list::{Column as CTaxableList, Entity as ETaxableList},
+        users::{Column as CUsers, Entity as EUsers},
     },
-    corporations::{ActiveModel as AmCorporations, Entity as ECorporations},
 };
+use rust_decimal::Decimal;
+use sea_orm::{
+    ColumnTrait, Condition, ConnectionTrait, EntityTrait, FromQueryResult, NotSet, QueryFilter,
+    QuerySelect, Set,
+};
+use std::collections::BTreeSet;
 
 pub async fn db_upgrade_wall_journal<DB: ConnectionTrait>(
     db: &DB,
@@ -280,6 +290,300 @@ pub async fn update_corporation_info<DB: ConnectionTrait>(
     Ok(())
 }
 
+// 获取所有用户ID
+pub async fn get_users_ids<DB: ConnectionTrait>(db: &DB) -> Result<Vec<i32>, String> {
+    #[derive(FromQueryResult)]
+    struct RowData {
+        id: i32,
+    }
+
+    let data = EUsers::find()
+        .select_only()
+        .column(CUsers::Id)
+        .into_model::<RowData>()
+        .all(db)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(data.iter().map(|c| c.id).collect())
+}
+
+// 获取指定用户的所有角色
+pub async fn get_user_characters_ids<DB: ConnectionTrait>(
+    db: &DB,
+    user_id: i32,
+) -> Result<Vec<i64>, String> {
+    #[derive(FromQueryResult)]
+    struct RowData {
+        character_id: i64,
+    }
+
+    let ids = ECharacters::find()
+        .select_only()
+        .column(CCharacters::CharacterId)
+        .filter(CCharacters::UserId.eq(user_id))
+        .into_model::<RowData>()
+        .all(db)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(ids.iter().map(|c| c.character_id).collect())
+}
+
+// 获取指定用户的主角色名, 若没有标注主角色,  则返回微信群昵称
+pub async fn get_user_main_character_name<DB: ConnectionTrait>(
+    db: &DB,
+    user_id: i32,
+) -> Result<String, String> {
+    #[derive(FromQueryResult)]
+    struct RowData {
+        name: String,
+    }
+
+    let data = ECharacters::find()
+        .select_only()
+        .column(CCharacters::Name)
+        .filter(
+            Condition::all()
+                .add(CCharacters::UserId.eq(user_id))
+                .add(CCharacters::Main.eq(true)),
+        )
+        .into_model::<RowData>()
+        .one(db)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if let Some(d) = data {
+        return Ok(d.name);
+    }
+
+    let user = EUsers::find_by_id(user_id)
+        .one(db)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if let Some(u) = user {
+        if let Some(n) = u.we_chat_group_nickname {
+            return Ok(n);
+        }
+    }
+
+    Err("User not found".to_string())
+}
+
+// 查询指定角色在指定时间范围内上缴的税收总数
+pub async fn find_character_tax_amount<DB: ConnectionTrait>(
+    db: &DB,
+    character_id: i64,
+    start_time: DateTime<Utc>,
+    end_time: DateTime<Utc>,
+) -> Result<Decimal, String> {
+    #[derive(FromQueryResult)]
+    struct RowData {
+        amount: i64,
+    }
+
+    assert!(start_time <= end_time);
+
+    let start_time = start_time.timestamp();
+    let end_time = end_time.timestamp();
+
+    let data = ECorporationWalletJournal::find()
+        .select_only()
+        .column(CCorporationWalletJournal::Amount)
+        .filter(
+            Condition::all()
+                .add(CCorporationWalletJournal::Date.gte(start_time))
+                .add(CCorporationWalletJournal::Date.lt(end_time))
+                .add(CCorporationWalletJournal::FirstPartyId.eq(character_id))
+                .add(CCorporationWalletJournal::RefType.eq(JournalRefType::PlayerDonation as i32))
+                .add(CCorporationWalletJournal::Amount.gt(0)),
+        )
+        .into_model::<RowData>()
+        .all(db)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let mut sum = Decimal::ZERO;
+    for d in data {
+        sum += decimal_from_i64(d.amount);
+    }
+
+    Ok(sum)
+}
+
+// 查询指定用户在指定时间范围内上缴的税收总额
+pub async fn find_user_pay_tax_amount<DB: ConnectionTrait>(
+    db: &DB,
+    user_id: i32,
+    start_time: DateTime<Utc>,
+    end_time: DateTime<Utc>,
+) -> Result<Decimal, String> {
+    assert!(start_time <= end_time);
+    let ids = get_user_characters_ids(db, user_id).await?;
+    let mut sum = Decimal::ZERO;
+    for character_id in ids {
+        let a = find_character_tax_amount(db, character_id, start_time, end_time).await?;
+        sum += a;
+    }
+    Ok(sum)
+}
+
+// 查询指定用户在指定月份上缴的税收总额
+pub async fn find_user_year_month_pay_tax<DB: ConnectionTrait>(
+    db: &DB,
+    user_id: i32,
+    year_month: YearMonth,
+) -> Result<Decimal, String> {
+    let start = year_month.lower();
+    let end = year_month.upper();
+    find_user_pay_tax_amount(db, user_id, start, end).await
+}
+
+// 获取指定用户在指定月份需上缴的税收
+// (poll_tax, pap_tax)
+pub async fn get_user_tax<DB: ConnectionTrait>(
+    db: &DB,
+    user_id: i32,
+    year_month: YearMonth,
+) -> Result<(Decimal, Decimal), String> {
+    let mut poll_tax_amount = Decimal::ZERO;
+    let mut pap_tax_amount = Decimal::ZERO;
+
+    let (flag_poll_tax, flag_pap_tax) = get_user_taxable(db, user_id, year_month).await?;
+    if (flag_poll_tax == false) & (flag_pap_tax == false) {
+        return Ok((poll_tax_amount, pap_tax_amount));
+    }
+
+    let (par_poll_tax, par_pap_tax, par_pap_standard) = get_tax_parameters(db, year_month).await?;
+
+    if flag_poll_tax {
+        poll_tax_amount = par_poll_tax;
+    }
+
+    if flag_pap_tax {
+        let user_pap = find_user_pap(db, user_id, year_month).await?;
+        let delta_pap = par_pap_standard - user_pap;
+        if delta_pap.is_sign_positive() {
+            pap_tax_amount = delta_pap * par_pap_tax;
+        }
+    }
+
+    Ok((poll_tax_amount, pap_tax_amount))
+}
+
+// 获取指定用户在指定月份是否需要交税
+// (poll_tax, pap_tax)
+pub async fn get_user_taxable<DB: ConnectionTrait>(
+    db: &DB,
+    user_id: i32,
+    year_month: YearMonth,
+) -> Result<(bool, bool), String> {
+    #[derive(FromQueryResult)]
+    struct RowData {
+        poll_tax: bool,
+        pap_tax: bool,
+    }
+
+    let data = ETaxableList::find()
+        .filter(
+            Condition::all()
+                .add(CTaxableList::UserId.eq(user_id))
+                .add(CTaxableList::Year.eq(year_month.year as i32))
+                .add(CTaxableList::Month.eq(year_month.month as i32)),
+        )
+        .into_model::<RowData>()
+        .one(db)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    match data {
+        None => Ok((false, false)),
+        Some(o) => Ok((o.poll_tax, o.pap_tax)),
+    }
+}
+
+// 查询指定角色在指定月份的PAP分
+pub async fn find_character_pap<DB: ConnectionTrait>(
+    db: &DB,
+    character_id: i64,
+    year_month: YearMonth,
+) -> Result<Decimal, String> {
+    #[derive(FromQueryResult)]
+    struct RowData {
+        pap: i32,
+    }
+
+    let data = EPapJournal::find()
+        .filter(
+            Condition::all()
+                .add(CPapJournal::CharacterId.eq(character_id))
+                .add(CPapJournal::Year.eq(year_month.year as i32))
+                .add(CPapJournal::Month.eq(year_month.month as i32)),
+        )
+        .into_model::<RowData>()
+        .one(db)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    match data {
+        None => Ok(Decimal::ZERO),
+        Some(o) => Ok(decimal_from_i64(o.pap as i64)),
+    }
+}
+
+// 查询指定用户在指定月份的PAP分
+pub async fn find_user_pap<DB: ConnectionTrait>(
+    db: &DB,
+    user_id: i32,
+    year_month: YearMonth,
+) -> Result<Decimal, String> {
+    let ids = get_user_characters_ids(db, user_id).await?;
+    let mut sum = Decimal::ZERO;
+    for id in ids {
+        let pap = find_character_pap(db, id, year_month).await?;
+        sum += pap;
+    }
+
+    Ok(sum)
+}
+
+// 获取指定月份的税收计算参数
+// (poll_tax, pap_tax, pap_standard)
+pub async fn get_tax_parameters<DB: ConnectionTrait>(
+    db: &DB,
+    year_month: YearMonth,
+) -> Result<(Decimal, Decimal, Decimal), String> {
+    #[derive(FromQueryResult)]
+    struct RowData {
+        poll_tax: i64,
+        pap_tax: i64,
+        pap_standard: i32,
+    }
+
+    let data = ETaxParameters::find()
+        .filter(
+            Condition::all()
+                .add(CTaxParameters::Year.eq(year_month.year as i32))
+                .add(CTaxParameters::Month.eq(year_month.month as i32)),
+        )
+        .into_model::<RowData>()
+        .one(db)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let row_data = data.ok_or(format!(
+        "no tax parameters found, year:{}, month:{}",
+        year_month.year, year_month.month
+    ))?;
+
+    let poll_tax = decimal_from_i64(row_data.poll_tax);
+    let pap_tax = decimal_from_i64(row_data.pap_tax);
+    let pap_standard = decimal_from_i64(row_data.pap_standard as i64);
+
+    Ok((poll_tax, pap_tax, pap_standard))
+}
+
 fn decimal_to_i64(mut d: Decimal) -> i64 {
     d.rescale(2);
     d.mantissa() as i64
@@ -287,4 +591,138 @@ fn decimal_to_i64(mut d: Decimal) -> i64 {
 
 pub fn decimal_from_i64(d: i64) -> Decimal {
     Decimal::new(d, 2)
+}
+
+#[derive(Ord, PartialOrd, Eq, PartialEq, Copy, Clone, Debug)]
+pub struct YearMonth {
+    pub year: i16,
+    pub month: u8,
+}
+
+impl YearMonth {
+    pub fn new(year: i16, month: u8) -> Self {
+        Self { year, month }
+    }
+
+    pub fn lower(&self) -> DateTime<Utc> {
+        let date = NaiveDate::from_ymd_opt(self.year as i32, self.month as u32, 1).unwrap();
+        let time = NaiveTime::from_hms_opt(0, 0, 0).unwrap();
+        let datetime = NaiveDateTime::new(date, time);
+        DateTime::from_naive_utc_and_offset(datetime, Utc)
+    }
+
+    pub fn upper(&self) -> DateTime<Utc> {
+        let mut month = self.month as u32;
+        let mut year = self.year as i32;
+        if self.month >= 12 {
+            month = 1;
+            year += 1;
+        } else {
+            month += 1;
+        }
+        let date = NaiveDate::from_ymd_opt(year, month, 1).unwrap();
+        let time = NaiveTime::from_hms_opt(0, 0, 0).unwrap();
+        let datetime = NaiveDateTime::new(date, time);
+        DateTime::from_naive_utc_and_offset(datetime, Utc)
+    }
+
+    pub fn add_month(&self, month: i32) -> YearMonth {
+        let month = (self.month as i32) + month;
+
+        let delta_year: i32 = month.div_euclid(12);
+        let delta_month: i32 = month.rem_euclid(12);
+
+        let tmp_year = (self.year as i32) + delta_year;
+        let tmp_month = delta_month;
+
+        if tmp_month == 0 {
+            YearMonth {
+                year: (tmp_year - 1) as i16,
+                month: 12,
+            }
+        } else {
+            YearMonth {
+                year: tmp_year as i16,
+                month: tmp_month as u8,
+            }
+        }
+    }
+
+    pub fn to_string_zh(&self) -> String {
+        format!("{}年{}月", self.year, self.month)
+    }
+
+    pub fn from_str(s: &str) -> Result<Self, String> {
+        // 2025-11
+        if let Some((y_str, m_str)) = s.split_once("-") {
+            let y = y_str.parse::<i16>().map_err(|e| e.to_string())?;
+            let m = m_str.parse::<u8>().map_err(|e| e.to_string())?;
+            if m < 1 || m > 12 {
+                Err(format!("invalid month: {}", m))
+            } else {
+                Ok(Self::new(y, m))
+            }
+        } else {
+            Err("illegal format".to_string())
+        }
+    }
+}
+
+#[test]
+fn year_month_add() {
+    let a = YearMonth::new(2025, 9);
+    println!("2025.9 + 1 = {:?}", a.add_month(1));
+    println!("2025.9 + 3 = {:?}", a.add_month(3));
+    println!("2025.9 + 4 = {:?}", a.add_month(4));
+    println!("2025.9 + 10 = {:?}", a.add_month(10));
+    println!("2025.9 - 1 = {:?}", a.add_month(-1));
+    println!("2025.9 - 8 = {:?}", a.add_month(-8));
+    println!("2025.9 - 9 = {:?}", a.add_month(-9));
+    println!("2025.9 - 10 = {:?}", a.add_month(-10));
+    println!("2025.9 - 20 = {:?}", a.add_month(-20));
+
+    let a = YearMonth::new(2025, 12);
+    println!("2025.12 + 0 = {:?}", a.add_month(0));
+    println!("2025.12 + 1 = {:?}", a.add_month(1));
+}
+
+pub struct RangeYearMonth {
+    start: YearMonth, // 包含
+    end: YearMonth,   // 包含
+}
+
+impl RangeYearMonth {
+    pub fn new(start: YearMonth, end: YearMonth) -> Self {
+        assert!(start <= end);
+        Self { start, end }
+    }
+}
+
+impl Iterator for RangeYearMonth {
+    type Item = YearMonth;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.start > self.end {
+            None
+        } else {
+            let out = self.start;
+            self.start = self.start.add_month(1);
+            Some(out)
+        }
+    }
+}
+
+#[test]
+fn test_range_year_month_iter() {
+    let start = YearMonth::new(2025, 10);
+    let end = YearMonth::new(2025, 10);
+    let range = RangeYearMonth::new(start, end);
+    for i in range {
+        println!("{:?}", i);
+    }
+    let start = YearMonth::new(2025, 10);
+    let end = YearMonth::new(2026, 3);
+    let range = RangeYearMonth::new(start, end);
+    for i in range {
+        println!("{:?}", i);
+    }
 }
