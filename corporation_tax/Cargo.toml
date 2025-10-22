@@ -1,0 +1,24 @@
+[package]
+name = "corporation_tax"
+version = { workspace = true }
+edition = { workspace = true }
+
+[dependencies]
+bytes = { workspace = true }
+chrono = { workspace = true }
+clap = { workspace = true }
+image = { workspace = true, features = ["rayon", "jpeg" ] }
+reqwest = { workspace = true }
+rust_decimal = { workspace = true, features = [ "serde-float" ] }
+sea-orm = { workspace = true, features = ["runtime-tokio-rustls", "sqlx-sqlite"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+strum = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "io-std", "macros"] }
+umya-spreadsheet = { workspace = true }
+
+db_wallet = { path = "../db_wallet" }
+
+[[example]]
+name = "generate_xlsx"
+path = "examples/generate_xlsx.rs"

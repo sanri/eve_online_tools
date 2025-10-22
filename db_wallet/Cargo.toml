@@ -1,0 +1,10 @@
+[package]
+name = "db_wallet"
+version = { workspace = true }
+edition = { workspace = true }
+
+[dependencies]
+sea-orm = { workspace = true }
+sea-orm-migration = { workspace = true }
+serde = { workspace = true }
+strum = { workspace = true }

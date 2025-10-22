@@ -1,0 +1,10 @@
+[package]
+name = "db_wallet_generate"
+version = { workspace = true }
+edition = { workspace = true }
+
+[dependencies]
+sea-orm-migration = { workspace = true, features = ["cli", "runtime-tokio-rustls", "sqlx-sqlite"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "io-std", "macros"] }
+
+db_wallet = { path = "../db_wallet" }
