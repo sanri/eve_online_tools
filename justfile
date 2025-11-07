@@ -67,5 +67,5 @@ run_generate_report:
         --db_path "{{path_test_db_wallet}}" \
         generate_report \
             --output_path "target/report.xlsx" \
-            --start_time "2025-09" \
-            --end_time "2025-10"
+            --start_time "2025-08" \
+            --end_time "2025-11"
