@@ -68,4 +68,4 @@ run_generate_report:
         generate_report \
             --output_path "target/report.xlsx" \
             --start_time "2025-08" \
-            --end_time "2025-11"
+            --end_time "2025-12"
