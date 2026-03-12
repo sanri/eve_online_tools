@@ -93,6 +93,8 @@ impl QueryDevice {
             Ok(Some(r))
         } else if res.status().as_u16() == 404 {
             Ok(None)
+        } else if res.status().as_u16() == 422 {
+            Ok(None)
         } else {
             let s = res.text().await.unwrap_or_else(|e| e.to_string());
             Err(format!(
